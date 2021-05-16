@@ -1,5 +1,6 @@
 // ==UserScript==
 // @name         Plex Download Button
+// @author       shadowmoon_waltz
 // @namespace    shadowmoon_waltz
 // @description  adds download button and alert with curl download command button to plex; based on https://greasyfork.org/en/scripts/374968-plex-download-buttons-without-premium (unspecified license, the setInterval trick and dynamically adding a download link) and https://piplong.run/plxdwnld/ (MIT License, getting download url code)
 // @copyright    2021, shadowmoon_waltz
