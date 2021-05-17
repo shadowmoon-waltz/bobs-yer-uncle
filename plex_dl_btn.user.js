@@ -2,26 +2,35 @@
 // @name         Plex Download Button
 // @author       shadowmoon_waltz
 // @namespace    shadowmoon_waltz
-// @description  adds download button and alert with curl download command button to plex; based on https://greasyfork.org/en/scripts/374968-plex-download-buttons-without-premium (unspecified license, the setInterval trick and dynamically adding a download link) and https://piplong.run/plxdwnld/ (MIT License, getting download url code)
+// @description  adds download button (individual videos) and copy curl download command(s) to clipboard (individual videos and seasons) button to plex; based on https://greasyfork.org/en/scripts/374968-plex-download-buttons-without-premium (unspecified license, the setInterval trick and dynamically adding a download link) and https://piplong.run/plxdwnld/ (MIT License, getting download url code before adding support for seasons)
 // @copyright    2021, shadowmoon_waltz
 // @license      GPL-3.0-or-later; https://www.gnu.org/licenses/gpl-3.0.txt
-// @version      0.1
+// @version      0.2
 // @match        https://app.plex.tv/*
-// @grant        none
+// @grant        GM_setClipboard
 // ==/UserScript==
 
-// for download link alert, can optionally add --limit-rate <something>(k|m|g) to curl command to limit k/m/gbytes/second
+// curl download command(s) copied to clipboard because more than a few lines causes some browsers to replace remaining lines with an ellipsis (if you change it back to putting links in popup, remove newline from each download line add and uncomment the if block that makes it so final line doesn't have newline)
 
 // this would be useful for getting the mpd when streaming, but is not used here: https://stackoverflow.com/questions/629671/how-can-i-intercept-xmlhttprequests-from-a-greasemonkey-script
 
+// changelog:
+// 0.2: add season download commands support; move download commands from popup to being copied to clipboard
+// 0.1: initial release
+
 const plxDwnld_283594572985 = (function() {
   "use strict";
+
+  // {url} will be replaced with the download url
+  // can optionally add --limit-rate <something>(k|m|g) to curl command to limit max download speed to k/m/gbytes/second
+  const downloadLine = "curl -O -J -L \"{url}\"\n";
 
   const self = {};
   const clientIdRegex = new RegExp("server\/([a-f0-9]{40})\/");
   const metadataIdRegex = new RegExp("key=%2Flibrary%2Fmetadata%2F(\\d+)");
   const apiResourceUrl = "https://plex.tv/api/resources?includeHttps=1&X-Plex-Token={token}";
   const apiLibraryUrl = "{baseuri}/library/metadata/{id}?X-Plex-Token={token}";
+  const apiLibraryChildrenUrl = "{baseuri}/library/metadata/{id}/children?X-Plex-Token={token}";
   const downloadUrl = "{baseuri}{partkey}?download=1&X-Plex-Token={token}";
   const accessTokenXpath = "//Device[@clientIdentifier='{clientid}']/@accessToken";
   const baseUriXpath = "//Device[@clientIdentifier='{clientid}']/Connection[@local='0']/@uri";
@@ -29,11 +38,15 @@ const plxDwnld_283594572985 = (function() {
   let accessToken = null;
   let baseUri = null;
 
-  const getXml = function(url, callback) {
+  const getXml = function(url, callback, url2) {
     const request = new XMLHttpRequest();
     request.onreadystatechange = function() {
-      if (request.readyState == 4 && request.status == 200) {
-        callback(request.responseXML);
+      if (request.readyState == 4) {
+        if (request.status == 200) {
+          callback(request.responseXML);
+        } else if (url2 != undefined && request.status == 400) {
+          getXml(url2, callback);
+        }
       }
     };
     request.open("GET", url);
@@ -53,19 +66,21 @@ const plxDwnld_283594572985 = (function() {
         const metadataId = metadataIdRegex.exec(window.location.href);
 
         if (metadataId && metadataId.length == 2) {
+          const url = apiLibraryUrl.replace('{baseuri}', baseUri).replace('{id}', metadataId[1]).replace('{token}', accessToken);
+          const url2 = apiLibraryChildrenUrl.replace('{baseuri}', baseUri).replace('{id}', metadataId[1]).replace('{token}', accessToken);
           if (popup) {
-            getXml(apiLibraryUrl.replace('{baseuri}', baseUri).replace('{id}', metadataId[1]).replace('{token}', accessToken), getDownloadUrlB);
+            getXml(url2, getDownloadUrlB, url);
           } else {
-            getXml(apiLibraryUrl.replace('{baseuri}', baseUri).replace('{id}', metadataId[1]).replace('{token}', accessToken), getDownloadUrlA);
+            getXml(url2, getDownloadUrlA, url);
           }
         } else {
-          alert("You are currently not viewing a media item.");
+          alert("You are currently not viewing a media item or season.");
         }
       } else {
         alert("Cannot find a valid accessToken.");
       }
     } else {
-      alert("You are currently not viewing a media item.");
+      alert("You are currently not viewing a media item or season.");
     }
   };
 
@@ -78,16 +93,28 @@ const plxDwnld_283594572985 = (function() {
   }
 
   const getDownloadUrl = function(xml, popup) {
-    const partKeyNode = xml.evaluate(partKeyXpath, xml, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-
-    if (partKeyNode.singleNodeValue) {
+    const partKeyNode = xml.evaluate(partKeyXpath, xml, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    if (partKeyNode.snapshotLength > 0) {
       if (popup) {
-        alert("curl -O -J -L \"" + downloadUrl.replace('{baseuri}', baseUri).replace('{partkey}', partKeyNode.singleNodeValue.textContent).replace('{token}', accessToken) + "\"");
+        var s = "";
+        for (var i = 0; i < partKeyNode.snapshotLength; i++) {
+          s += downloadLine.replace('{url}', downloadUrl.replace('{baseuri}', baseUri).replace('{partkey}', partKeyNode.snapshotItem(i).textContent).replace('{token}', accessToken));
+          //if (i < partKeyNode.snapshotLength - 1) {
+          //  s += "\n";
+          //}
+        }
+        //alert(s);
+        GM_setClipboard(s);
+        alert("curl download command" + (partKeyNode.snapshotLength > 1 ? "s" : "") + " copied to clipboard");
       } else {
-        window.location.href = downloadUrl.replace('{baseuri}', baseUri).replace('{partkey}', partKeyNode.singleNodeValue.textContent).replace('{token}', accessToken);
+        if (partKeyNode.snapshotLength == 1) {
+          window.location.href = downloadUrl.replace('{baseuri}', baseUri).replace('{partkey}', partKeyNode.snapshotItem(0).textContent).replace('{token}', accessToken);
+        } else {
+          alert("You need to use DL2 button for seasons.");
+        }
       }
     } else {
-      alert("You are currently not viewing a media item.");
+      alert("You are currently not viewing a media item or season.");
     }
   };
 
@@ -101,10 +128,11 @@ const plxDwnld_283594572985 = (function() {
 
   self.init = function(popup) {
     if (typeof localStorage.myPlexAccessToken != "undefined") {
+      const url = apiResourceUrl.replace('{token}', localStorage.myPlexAccessToken);
       if (popup) {
-        getXml(apiResourceUrl.replace('{token}', localStorage.myPlexAccessToken), getMetadataB);
+        getXml(url, getMetadataB);
       } else {
-        getXml(apiResourceUrl.replace('{token}', localStorage.myPlexAccessToken), getMetadataA);
+        getXml(url, getMetadataA);
       }
     } else {
       alert("You are currently not browsing or logged into a Plex web environment.");
